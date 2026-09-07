@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MES с APS-ядром — план цеха, который выдерживает реальность</title>
+<meta name="description" content="Российская MES с планировщиком конечной мощности на OR-Tools CP-SAT: переналадки по последовательности, альтернативные станки, партии запуска, терминал оператора и OEE. Пилот на одном заводе со скидкой до 50%.">
+<meta property="og:title" content="MES с APS-ядром">
+<meta property="og:description" content="План цеха на конечной мощности: 54 операции — оптимум за 0,9 с. Терминал оператора, OEE, импорт справочников, on-prem.">
+<meta property="og:type" content="website">
+<style>
+  :root{
+    --bg:#0e1116; --bg2:#141922; --card:#161b23; --line:#232b36;
+    --fg:#e9edf3; --muted:#98a3b3; --accent:#4b83e8; --accent2:#57c08a;
+    --warn:#d99a3f; --radius:14px; --max:1120px;
+  }
+  @media (prefers-color-scheme: light){
+    :root{ --bg:#f7f8fa; --bg2:#eef1f5; --card:#fff; --line:#e2e6ec;
+           --fg:#161a20; --muted:#5d6675; --accent:#2f6fd0; --accent2:#3f8f63; }
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--fg);
+       font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;
+       -webkit-font-smoothing:antialiased}
+  .wrap{max-width:var(--max);margin:0 auto;padding:0 22px}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  h1,h2,h3{line-height:1.2;margin:0 0 14px;font-weight:650;letter-spacing:-.01em}
+  h1{font-size:clamp(30px,5vw,50px)}
+  h2{font-size:clamp(23px,3.2vw,33px)}
+  h3{font-size:18px}
+  p{margin:0 0 14px}
+  .muted{color:var(--muted)}
+  .btn{display:inline-block;padding:13px 24px;border-radius:10px;border:1px solid var(--line);
+       background:var(--card);color:var(--fg);font-weight:600;cursor:pointer}
+  .btn:hover{border-color:var(--accent);text-decoration:none}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  .btn.primary:hover{filter:brightness(1.08)}
+
+  header.nav{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--bg) 88%,transparent);
+             backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+  .nav .wrap{display:flex;align-items:center;gap:20px;height:62px}
+  .logo{font-weight:700;letter-spacing:.02em;display:flex;align-items:center;gap:9px}
+  .logo i{width:11px;height:11px;background:var(--accent);border-radius:3px;display:block}
+  .nav nav{display:flex;gap:20px;margin-left:auto;font-size:15px}
+  .nav nav a{color:var(--muted)}
+  .nav nav a:hover{color:var(--fg);text-decoration:none}
+  @media(max-width:760px){.nav nav a.hide-s{display:none}}
+
+  .hero{padding:74px 0 20px;border-bottom:1px solid var(--line)}
+  .tag{display:inline-block;font-size:13px;color:var(--accent);border:1px solid var(--line);
+       border-radius:20px;padding:5px 13px;margin-bottom:20px}
+  .hero p.lead{font-size:19px;color:var(--muted);max-width:660px}
+  .cta{display:flex;gap:12px;flex-wrap:wrap;margin:26px 0 10px}
+  .facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin:38px 0 54px}
+  .fact{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:16px}
+  .fact b{display:block;font-size:26px;font-weight:650}
+  .fact span{font-size:13px;color:var(--muted)}
+
+  section{padding:62px 0;border-bottom:1px solid var(--line)}
+  .lead-2{max-width:720px;color:var(--muted);margin-bottom:34px}
+  .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:20px}
+  .card h3{margin-bottom:8px}
+  .card p{margin:0;color:var(--muted);font-size:15px}
+  .card .ico{width:34px;height:34px;border-radius:9px;background:var(--bg2);display:flex;
+             align-items:center;justify-content:center;margin-bottom:12px;color:var(--accent);font-weight:700}
+
+  .pain{display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--line);
+        border-radius:var(--radius);overflow:hidden}
+  .pain>div{padding:22px}
+  .pain .was{background:var(--bg2)}
+  .pain h3{font-size:15px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+  .pain ul{margin:0;padding-left:19px}
+  .pain li{margin-bottom:9px;font-size:15px}
+  .pain .was li{color:var(--muted)}
+  @media(max-width:700px){.pain{grid-template-columns:1fr}}
+
+  table{width:100%;border-collapse:collapse;font-size:15px}
+  th,td{text-align:left;padding:12px 14px;border-bottom:1px solid var(--line)}
+  th{color:var(--muted);font-weight:500;font-size:13px;text-transform:uppercase;letter-spacing:.05em}
+  td.num{text-align:right;white-space:nowrap}
+  tr.hl td{background:color-mix(in srgb,var(--accent) 9%,transparent)}
+  .tbl-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:var(--radius);background:var(--card)}
+  .note{font-size:14px;color:var(--muted);margin-top:14px}
+
+  .calc{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:22px;margin-top:22px}
+  .calc .row{display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+  .calc input[type=range]{flex:1;min-width:220px;accent-color:var(--accent)}
+  .calc output{font-size:28px;font-weight:650}
+  .calc .res{margin-top:16px;font-size:15px;color:var(--muted)}
+  .calc .res b{color:var(--fg);font-size:19px}
+
+  .steps{counter-reset:s;display:grid;gap:14px}
+  .step{display:flex;gap:16px;background:var(--card);border:1px solid var(--line);
+        border-radius:var(--radius);padding:18px}
+  .step::before{counter-increment:s;content:counter(s);flex:none;width:30px;height:30px;border-radius:8px;
+                background:var(--bg2);color:var(--accent);display:flex;align-items:center;
+                justify-content:center;font-weight:700;font-size:15px}
+  .step p{margin:4px 0 0;color:var(--muted);font-size:15px}
+
+  .final{padding:66px 0;text-align:center}
+  .final p{max-width:600px;margin:0 auto 22px;color:var(--muted)}
+  footer{border-top:1px solid var(--line);padding:28px 0;font-size:14px;color:var(--muted)}
+  footer .wrap{display:flex;gap:16px;flex-wrap:wrap;align-items:center}
+  footer .grow{flex:1}
+</style>
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap">
+    <span class="logo"><i></i>MES · APS</span>
+    <nav>
+      <a href="#problema" class="hide-s">Задача</a>
+      <a href="#vozmozhnosti">Возможности</a>
+      <a href="#tarify">Тарифы</a>
+      <a href="#pilot" class="hide-s">Пилот</a>
+      <a href="demo/">Демо</a>
+    </nav>
+  </div>
+</header>
+
+<div class="hero">
+  <div class="wrap">
+    <span class="tag">Российская MES с APS-ядром · on-prem или облако</span>
+    <h1>План цеха, который выдерживает<br>встречу с реальностью</h1>
+    <p class="lead">Планировщик считает конечную мощность станков, переналадки по последовательности
+      и альтернативные центры — а не раскладывает заказы по календарю в предположении,
+      что цех бесконечен. Мастер видит план и узкое место, оператор закрывает операции с терминала,
+      факт возвращается в план.</p>
+    <div class="cta">
+      <a class="btn primary" href="demo/">Открыть кликабельное демо</a>
+      <a class="btn" href="#pilot">Условия пилота</a>
+    </div>
+    <div class="facts">
+      <div class="fact"><b>0,9 с</b><span>54 операции — доказанный оптимум</span></div>
+      <div class="fact"><b>60 с</b><span>270 операций — допустимый план</span></div>
+      <div class="fact"><b>4 блока</b><span>справочники, план, терминал, OEE</span></div>
+      <div class="fact"><b>on-prem</b><span>контур завода, без внешних сервисов</span></div>
+    </div>
+  </div>
+</div>
+
+<section id="problema">
+  <div class="wrap">
+    <h2>Что меняется в цехе</h2>
+    <p class="lead-2">Типовая точка отсчёта — мастер, Excel и совещание. Учётные MES фиксируют,
+      что уже произошло; здесь система говорит, что запускать следующим и чем это обойдётся.</p>
+    <div class="pain">
+      <div class="was">
+        <h3>Мастер и Excel</h3>
+        <ul>
+          <li>План на неделю рассыпается на второй день</li>
+          <li>Переналадки складываются стихийно — станок половину смены переезжает с семейства на семейство</li>
+          <li>Узкое место видно постфактум, по авралу</li>
+          <li>Срок заказа обещают «на глаз», просрочку узнают от клиента</li>
+          <li>Факт по операциям собирают в конце месяца, OEE не считают</li>
+        </ul>
+      </div>
+      <div>
+        <h3>С APS-ядром</h3>
+        <ul>
+          <li>План строится на конечной мощности и календарях смен</li>
+          <li>Переналадки минимизируются: операции одного семейства идут подряд</li>
+          <li>Загрузка центров и узкое место — на пульте мастера</li>
+          <li>Решатель заранее показывает, какие заказы опаздывают и на сколько</li>
+          <li>Оператор закрывает операцию в терминале, факт сразу в отчётах и OEE</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="vozmozhnosti">
+  <div class="wrap">
+    <h2>Возможности</h2>
+    <p class="lead-2">Ядро — собственное, на FastAPI. Решатель — OR-Tools CP-SAT (Apache 2.0),
+      вынесен за REST-границу: его можно масштабировать и заменять, не трогая MES.</p>
+    <div class="cols">
+      <div class="card"><div class="ico">К</div><h3>Конечная мощность</h3>
+        <p>Календари смен, выходные, параллельные посты на участке. План не назначает
+           работу туда, где нет свободного времени.</p></div>
+      <div class="card"><div class="ico">П</div><h3>Переналадки по семействам</h3>
+        <p>Матрица времён переналадки: смена семейства на станке стоит времени, и решатель
+           это учитывает, а не игнорирует.</p></div>
+      <div class="card"><div class="ico">А</div><h3>Альтернативные станки</h3>
+        <p>Гибкий job-shop: операция может уйти на любой из подходящих центров — выбор делает
+           решатель по загрузке, а не мастер по памяти.</p></div>
+      <div class="card"><div class="ico">Ц</div><h3>Цеховой терминал</h3>
+        <p>Крупные кнопки под перчатки и планшет: старт, годные и брак, фиксация простоя
+           с причиной. Очередь на смену — по рабочему центру.</p></div>
+      <div class="card"><div class="ico">O</div><h3>OEE и загрузка</h3>
+        <p>Доступность, производительность, качество по каждому центру за период.
+           План-факт по операциям и WIP в работе прямо сейчас.</p></div>
+      <div class="card"><div class="ico">И</div><h3>Импорт справочников</h3>
+        <p>Станки, сменность, маршруты и заказы загружаются из CSV или XLSX по шаблонам —
+           запуск пилота не упирается в ручной ввод.</p></div>
+      <div class="card"><div class="ico">З</div><h3>Пиннинг запущенного</h3>
+        <p>Пересчёт плана не срывает то, что уже в работе: запущенные операции фиксируются
+           и остаются на своих местах.</p></div>
+      <div class="card"><div class="ico">Р</div><h3>Роли и контур</h3>
+        <p>Администратор, мастер, оператор. Развёртывание в контуре завода:
+           Docker, PostgreSQL, nginx — без обязательных внешних сервисов.</p></div>
+      <div class="card"><div class="ico">API</div><h3>REST и интеграции</h3>
+        <p>Открытое API с документацией: заказы из ERP, коннектор 1С, LDAP/AD
+           на старших тарифах.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="demo-block">
+  <div class="wrap">
+    <h2>Демо на реальном расчёте</h2>
+    <p class="lead-2">В демо не нарисованные картинки, а выгрузка настоящего прогона:
+      50 заказов, 8 рабочих центров, 213 операций, неделя закрытых смен позади и план впереди.
+      Пульт мастера и терминал оператора кликаются: запустите операцию в терминале —
+      она сменит цвет на диаграмме мастера, а факт уйдёт в OEE.</p>
+    <a class="btn primary" href="demo/">Открыть демо</a>
+  </div>
+</section>
+
+<section id="tarify">
+  <div class="wrap">
+    <h2>Тарифы</h2>
+    <p class="lead-2">Единица счёта — <b>пост</b> (одновременно выполняемая работа на рабочем центре),
+      а не пользователь: людей в системе сколько нужно. Решатель не режется ни на одном тарифе —
+      младший участок считает так же, как холдинг.</p>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Тариф</th><th>Постов</th><th class="num">Подписка, ₽/год</th><th class="num">Внедрение, ₽</th></tr></thead>
+        <tbody>
+          <tr><td><b>Участок</b></td><td>до 5</td><td class="num">180 000</td><td class="num">0</td></tr>
+          <tr class="hl"><td><b>Цех</b></td><td>до 20</td><td class="num">540 000</td><td class="num">400 000</td></tr>
+          <tr><td><b>Завод</b></td><td>21–60</td><td class="num">1 200 000</td><td class="num">900 000</td></tr>
+          <tr><td><b>Производство</b></td><td>61–150</td><td class="num">3 000 000</td><td class="num">по смете</td></tr>
+          <tr><td><b>Холдинг</b></td><td>150+, мультиплощадка</td><td class="num">по запросу</td><td class="num">по смете</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="calc">
+      <div class="row">
+        <label for="posts" style="min-width:150px">Постов в производстве</label>
+        <input type="range" id="posts" min="1" max="200" value="18" step="1">
+        <output id="postsOut">18</output>
+      </div>
+      <div class="res" id="calcRes"></div>
+    </div>
+    <p class="note">Поддержка — 16 / 20 / 24 % от подписки в год в зависимости от уровня SLA.
+      LDAP/AD, REST API и коннектор 1С — с тарифа «Завод». Мультиплощадка и право on-prem —
+      с тарифа «Производство». Цены — стартовый коридор 2026 года, фиксируются в договоре.</p>
+  </div>
+</section>
+
+<section id="pilot">
+  <div class="wrap">
+    <h2>Пилот на одном заводе</h2>
+    <p class="lead-2">Прайс публикуется до подписания. Пилотному заводу — скидка 40–50 % на лицензию
+      на 12 месяцев, внедрение по полной цене, в обмен на кейс и цифры эффекта.</p>
+    <div class="steps">
+      <div class="step"><div><b>Данные</b><p>Список станков, сменность, маршруты и нормы 2–3 реальных изделий,
+        текущие заказы. Принимаем в CSV или XLSX по шаблонам.</p></div></div>
+      <div class="step"><div><b>Развёртывание</b><p>Контур завода или наш VPS, Docker + PostgreSQL.
+        Роли, учётные записи мастеров и операторов, терминалы на участках.</p></div></div>
+      <div class="step"><div><b>Сверка плана</b><p>Первый расчёт разбирается вместе с мастером:
+        где решатель прав, где не хватает ограничения. Правится модель, а не план вручную.</p></div></div>
+      <div class="step"><div><b>Работа на факте</b><p>Смена закрывается через терминал,
+        план пересчитывается скользящим горизонтом, накапливаются нормы по факту и OEE.</p></div></div>
+      <div class="step"><div><b>Цифры эффекта</b><p>Через квартал: доля просроченных заказов,
+        время в переналадках, загрузка узкого места — до и после. Это и есть кейс.</p></div></div>
+    </div>
+  </div>
+</section>
+
+<div class="final">
+  <div class="wrap">
+    <h2>Посмотреть, как это выглядит в цехе</h2>
+    <p>Демо открывается в браузере, ничего устанавливать не нужно.
+      Для разговора о пилоте нужны список станков и один реальный маршрут — этого хватает
+      для первого расчёта.</p>
+    <div class="cta" style="justify-content:center">
+      <a class="btn primary" href="demo/">Открыть демо</a>
+      <a class="btn" href="https://github.com/4ern0kniznik">Проект на GitHub</a>
+    </div>
+  </div>
+</div>
+
+<footer>
+  <div class="wrap">
+    <span>MES с APS-ядром · планирование дискретного производства</span>
+    <span class="grow"></span>
+    <span>Ядро FastAPI · решатель OR-Tools CP-SAT · PostgreSQL</span>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var TIERS = [
+    { max: 5,   name: 'Участок',      fee: 180000,  impl: 0 },
+    { max: 20,  name: 'Цех',          fee: 540000,  impl: 400000 },
+    { max: 60,  name: 'Завод',        fee: 1200000, impl: 900000 },
+    { max: 150, name: 'Производство', fee: 3000000, impl: null }
+  ];
+  var posts = document.getElementById('posts');
+  var out = document.getElementById('postsOut');
+  var res = document.getElementById('calcRes');
+  var rub = function (n) { return n.toLocaleString('ru-RU') + ' ₽'; };
+
+  function render() {
+    var n = Number(posts.value);
+    out.textContent = n;
+    var t = TIERS.find(function (x) { return n <= x.max; });
+    if (!t) {
+      res.innerHTML = 'Тариф <b>Холдинг</b> — от 150 постов и мультиплощадки. ' +
+                      'Подписка и внедрение считаются по ТЗ.';
+      return;
+    }
+    var impl = t.impl === null ? 'по смете' : (t.impl === 0 ? 'включено' : rub(t.impl));
+    var sup = Math.round(t.fee * 0.20);
+    res.innerHTML = 'Тариф <b>' + t.name + '</b> · подписка <b>' + rub(t.fee) + '</b> в год · ' +
+                    'внедрение ' + impl + ' · поддержка 20 % — ' + rub(sup) + ' в год.<br>' +
+                    'Первый год при пилотной скидке 45 %: подписка ' + rub(Math.round(t.fee * 0.55)) + '.';
+  }
+  posts.addEventListener('input', render);
+  render();
+})();
+</script>
+</body>
+</html>

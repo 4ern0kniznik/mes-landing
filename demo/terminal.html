@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Терминал оператора</title>
+<style>
+  :root { --bg:#f4f6f8; --fg:#15181d; --muted:#68707c; --line:#dfe3e9; --card:#fff;
+          --accent:#2f6fd0; --ok:#3f8f63; --warn:#c8791f; --stop:#c0453f; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#121418; --fg:#e9ebee; --muted:#98a0ab; --line:#282d35; --card:#1b1e24;
+            --accent:#5089e0; --ok:#4fa87a; --warn:#d99a3f; --stop:#d4605a; }
+  }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  header { position:sticky; top:0; z-index:5; background:var(--card); border-bottom:1px solid var(--line);
+           padding:12px 16px; display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  select { font:inherit; padding:10px 12px; border-radius:8px; border:1px solid var(--line); background:var(--bg); color:var(--fg); }
+  h1 { font-size:18px; margin:0; font-weight:600; }
+  .grow { flex:1; }
+  .muted { color:var(--muted); font-size:13px; }
+  main { padding:16px; max-width:900px; margin:0 auto; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:12px; }
+  .card.active { border-color:var(--accent); border-width:2px; }
+  .card.stopped { border-color:var(--stop); border-width:2px; }
+  .title { font-size:18px; font-weight:600; margin-bottom:2px; }
+  .sub { color:var(--muted); font-size:14px; }
+  .btns { display:flex; gap:10px; margin-top:12px; flex-wrap:wrap; }
+  button { font:inherit; font-weight:600; padding:14px 20px; border-radius:10px; border:none;
+           color:#fff; background:var(--accent); cursor:pointer; min-height:52px; min-width:120px; }
+  button.ok { background:var(--ok); }
+  button.stop { background:var(--stop); }
+  button.ghost { background:transparent; color:var(--fg); border:1px solid var(--line); }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  .panel { margin-top:12px; padding:12px; border:1px dashed var(--line); border-radius:10px; }
+  .field { display:flex; gap:10px; align-items:center; margin-bottom:10px; flex-wrap:wrap; }
+  label { font-size:14px; color:var(--muted); min-width:80px; }
+  input[type=number] { font:inherit; padding:12px; width:120px; border-radius:8px; border:1px solid var(--line);
+                       background:var(--bg); color:var(--fg); }
+  .msg { padding:10px 14px; border-radius:8px; margin-bottom:12px; font-size:14px; }
+  .msg.err { background:rgba(192,69,63,.14); color:var(--stop); }
+  .msg.ok { background:rgba(63,143,99,.14); color:var(--ok); }
+  .empty { text-align:center; color:var(--muted); padding:40px 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Терминал</h1>
+  <select id="wc"></select>
+  <span class="grow"></span>
+  <span class="muted" id="clock"></span>
+</header>
+<main>
+  <div id="msg"></div>
+  <div id="downtime"></div>
+  <div id="list"></div>
+</main>
+<script src="data.js"></script>
+<script src="store.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+let state = { wc: localStorage.getItem('mes.wc') || '', openPanel: null };
+
+function say(text, kind) {
+  $('msg').innerHTML = text ? `<div class="msg ${kind || 'ok'}">${text}</div>` : '';
+  if (text) setTimeout(() => { $('msg').innerHTML = ''; }, 6000);
+}
+
+const api = (path, options) => window.MES_DEMO_API(path, options);
+
+function fmt(iso) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
+async function loadCenters() {
+  const centers = await api('/api/reference/work-centers');
+  $('wc').innerHTML = centers.map(c => `<option value="${c.code}">${c.code} — ${c.name}</option>`).join('');
+  if (!centers.some(c => c.code === state.wc)) state.wc = centers[0]?.code;
+}
+
+async function render() {
+  if (!state.wc) return;
+  localStorage.setItem('mes.wc', state.wc);
+  $('wc').value = state.wc;
+  const data = await api(`/api/terminal/queue/${encodeURIComponent(state.wc)}`);
+
+  $('downtime').innerHTML = data.downtime
+    ? `<div class="card stopped">
+         <div class="title">Простой: ${data.downtime.reason}</div>
+         <div class="sub">с ${fmt(data.downtime.started_at)}</div>
+         <div class="btns"><button class="ok" data-act="closeDown" data-id="${data.downtime.id}">Простой устранён</button></div>
+       </div>`
+    : `<div class="btns" style="margin-bottom:12px">
+         <button class="stop" data-act="openDown">Зафиксировать простой</button>
+       </div>`;
+
+  if (!data.queue.length) {
+    $('list').innerHTML = '<div class="empty">Очередь пуста</div>';
+    return;
+  }
+
+  $('list').innerHTML = data.queue.map(op => {
+    const running = op.status === 'in_progress';
+    const panel = state.openPanel === op.operation_id
+      ? `<div class="panel">
+           <div class="field"><label>Годные</label><input type="number" min="0" id="good-${op.operation_id}" value="${op.qty}"></div>
+           <div class="field"><label>Брак</label><input type="number" min="0" id="scrap-${op.operation_id}" value="0"></div>
+           <div class="btns">
+             <button class="ok" data-act="finish" data-id="${op.operation_id}">Подтвердить</button>
+             <button class="ghost" data-act="cancel">Отмена</button>
+           </div>
+         </div>`
+      : '';
+    return `<div class="card ${running ? 'active' : ''}">
+        <div class="title">${op.order} · ${op.operation}</div>
+        <div class="sub">${op.item} · ${op.qty} шт${op.lot > 1 ? ` · партия ${op.lot}` : ''} · ${op.duration_minutes} мин</div>
+        <div class="sub">план: ${fmt(op.planned_start)} — ${fmt(op.planned_end)}</div>
+        <div class="btns">
+          <button data-act="start" data-id="${op.operation_id}" ${running ? 'disabled' : ''}>${running ? 'В работе' : 'Старт'}</button>
+          <button class="ok" data-act="panel" data-id="${op.operation_id}" ${running ? '' : 'disabled'}>Закрыть операцию</button>
+        </div>${panel}
+      </div>`;
+  }).join('');
+}
+
+async function openDowntimePanel() {
+  const reasons = await api('/api/terminal/downtime-reasons');
+  $('downtime').innerHTML = `<div class="card stopped">
+      <div class="title">Причина простоя</div>
+      <div class="field" style="margin-top:10px">
+        <select id="reason">${reasons.map(r => `<option>${r}</option>`).join('')}</select>
+      </div>
+      <div class="btns">
+        <button class="stop" data-act="startDown">Зафиксировать</button>
+        <button class="ghost" data-act="refresh">Отмена</button>
+      </div>
+    </div>`;
+}
+
+document.addEventListener('click', async (e) => {
+  const btn = e.target.closest('button[data-act]');
+  if (!btn) return;
+  const id = Number(btn.dataset.id);
+  try {
+    switch (btn.dataset.act) {
+      case 'start':
+        await api('/api/terminal/start', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ operation_id: id }) });
+        say('Операция запущена'); break;
+      case 'panel': state.openPanel = id; break;
+      case 'cancel': state.openPanel = null; break;
+      case 'finish': {
+        const good = Number($(`good-${id}`).value), scrap = Number($(`scrap-${id}`).value);
+        await api('/api/terminal/finish', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ operation_id: id, qty_good: good, qty_scrap: scrap }) });
+        state.openPanel = null; say(`Закрыто: годных ${good}, брак ${scrap}`); break;
+      }
+      case 'openDown': await openDowntimePanel(); return;
+      case 'startDown':
+        await api('/api/terminal/downtime', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ work_center_code: state.wc, reason: $('reason').value,
+            started_at: new Date().toISOString().slice(0, 19) }) });
+        say('Простой зафиксирован'); break;
+      case 'closeDown': {
+        const r = await api(`/api/terminal/downtime/${id}/close`, { method: 'POST' });
+        say(`Простой закрыт: ${r.minutes} мин`); break;
+      }
+    }
+    await render();
+  } catch (err) {
+    say(err.message, 'err');
+    await render();
+  }
+});
+
+$('wc').onchange = () => { state.wc = $('wc').value; state.openPanel = null; render(); };
+setInterval(() => { $('clock').textContent = new Date().toLocaleTimeString('ru-RU'); }, 1000);
+setInterval(() => { if (!state.openPanel) render().catch(() => {}); }, 20000);
+loadCenters().then(render).catch(e => say(e.message, 'err'));
+
+window.MES_DEMO_REFRESH = () => { render().catch(() => {}); };
+</script>
+</body>
+</html>

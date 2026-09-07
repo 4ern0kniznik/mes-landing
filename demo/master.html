@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MES — пульт мастера</title>
+<style>
+  :root { --bg:#f6f7f9; --fg:#1b1d21; --muted:#6b7280; --line:#e2e5ea; --card:#fff;
+          --bar:#3f6fd8; --late:#d05353; --done:#4b9b6e; --run:#c8791f; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14161a; --fg:#e8eaed; --muted:#9aa1ab; --line:#2a2e35; --card:#1c1f25;
+            --bar:#5b86e5; --late:#e07070; --done:#5db98a; --run:#d99a3f; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  header { padding:16px 22px; border-bottom:1px solid var(--line); display:flex; gap:14px; align-items:center; flex-wrap:wrap; }
+  h1 { font-size:17px; margin:0; font-weight:600; }
+  h2 { font-size:14px; margin:0 0 10px; font-weight:600; }
+  .muted { color:var(--muted); font-size:12px; }
+  .grow { flex:1; }
+  button, a.btn { font:inherit; padding:8px 15px; border:1px solid var(--line); border-radius:8px;
+                  background:var(--card); color:var(--fg); cursor:pointer; text-decoration:none; }
+  button:hover, a.btn:hover { border-color:var(--bar); }
+  button.primary { background:var(--bar); color:#fff; border-color:var(--bar); }
+  main { padding:18px 22px 48px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:16px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:16px; }
+  .kpis { display:flex; gap:22px; flex-wrap:wrap; }
+  .kpi b { display:block; font-size:22px; font-weight:600; }
+  .kpi span { color:var(--muted); font-size:12px; }
+  .row { display:flex; align-items:center; border-bottom:1px solid var(--line); }
+  .row:last-child { border-bottom:none; }
+  .wc { width:84px; flex:none; font-weight:600; font-size:12px; padding:8px 6px; }
+  .track { position:relative; height:34px; flex:1; overflow:hidden; }
+  .bar { position:absolute; top:6px; height:22px; background:var(--bar); border-radius:4px; color:#fff;
+         font-size:10px; line-height:22px; padding:0 5px; white-space:nowrap; overflow:hidden; }
+  .bar.done { background:var(--done); } .bar.in_progress { background:var(--run); } .bar.late { background:var(--late); }
+  .scroll { overflow-x:auto; } .inner { min-width:1100px; }
+  table { border-collapse:collapse; width:100%; font-size:13px; }
+  th, td { text-align:left; padding:6px 10px; border-bottom:1px solid var(--line); }
+  th { color:var(--muted); font-weight:500; }
+  .days { display:flex; margin-left:84px; font-size:11px; color:var(--muted); }
+  .day { flex:none; border-left:1px solid var(--line); padding-left:4px; }
+  .pill { display:inline-block; padding:2px 8px; border-radius:20px; font-size:12px; background:rgba(208,83,83,.16); color:var(--late); }
+  .meter { height:6px; background:var(--line); border-radius:4px; overflow:hidden; }
+  .meter i { display:block; height:100%; background:var(--bar); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Пульт мастера</h1>
+  <span class="muted" id="meta">загрузка…</span>
+  <span class="grow"></span>
+  <button id="reload">Обновить</button>
+  <button class="primary" id="replan">Пересчитать план</button>
+</header>
+<main>
+  <div class="card"><div class="kpis" id="kpis"></div></div>
+  <div class="card">
+    <h2>План по рабочим центрам</h2>
+    <div class="scroll"><div class="inner"><div class="days" id="days"></div><div id="chart"></div></div></div>
+  </div>
+  <div class="grid">
+    <div class="card">
+      <h2>Загрузка рабочих центров</h2>
+      <table id="load"><thead><tr><th>Центр</th><th>Операций</th><th>Часов</th><th></th></tr></thead><tbody></tbody></table>
+    </div>
+    <div class="card">
+      <h2>OEE за 7 дней</h2>
+      <table id="oee"><thead><tr><th>Центр</th><th>Доступн.</th><th>Произв.</th><th>Качество</th><th>OEE</th></tr></thead><tbody></tbody></table>
+    </div>
+  </div>
+</main>
+<script src="data.js"></script>
+<script src="store.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+const pct = (v) => (v * 100).toFixed(0) + '%';
+
+const api = (path, options) => window.MES_DEMO_API(path, options);
+
+async function load() {
+  const data = await api('/api/plan/gantt-data');
+  if (!data.rows.length) {
+    $('meta').textContent = 'план не рассчитан — нажмите «Пересчитать план»';
+    $('chart').innerHTML = ''; $('kpis').innerHTML = ''; return;
+  }
+  const min = new Date(data.min), max = new Date(data.max), span = max - min;
+  $('meta').textContent = `${min.toLocaleString('ru-RU')} — ${max.toLocaleString('ru-RU')}`;
+
+  const byWc = {};
+  data.rows.forEach(r => (byWc[r.wc] = byWc[r.wc] || []).push(r));
+  const days = Math.max(1, Math.ceil(span / 86400000));
+  $('days').innerHTML = Array.from({ length: days }, (_, i) => {
+    const d = new Date(min.getTime() + i * 86400000);
+    return `<div class="day" style="width:${100 / days}%">${d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' })}</div>`;
+  }).join('');
+
+  $('chart').innerHTML = Object.keys(byWc).sort().map(wc => {
+    const bars = byWc[wc].map(r => {
+      const s = new Date(r.start), e = new Date(r.end);
+      const left = (s - min) / span * 100, width = Math.max((e - s) / span * 100, 0.25);
+      const title = `${r.order} · ${r.op}\n${s.toLocaleString('ru-RU')} — ${e.toLocaleString('ru-RU')}`;
+      return `<div class="bar ${r.status}" style="left:${left}%;width:${width}%" title="${title}">${r.order}</div>`;
+    }).join('');
+    return `<div class="row"><div class="wc">${wc}</div><div class="track">${bars}</div></div>`;
+  }).join('');
+
+  const [loadRows, wip, oeeRows] = await Promise.all([
+    api('/api/reports/load').catch(() => []),
+    api('/api/reports/wip').catch(() => ({})),
+    api('/api/reports/oee?days=7').catch(() => []),
+  ]);
+
+  const maxHours = Math.max(...loadRows.map(r => r.hours), 1);
+  $('load').querySelector('tbody').innerHTML = loadRows.map(r =>
+    `<tr><td>${r.work_center}</td><td>${r.operations}</td><td>${r.hours}</td>
+         <td style="width:120px"><div class="meter"><i style="width:${r.hours / maxHours * 100}%"></i></div></td></tr>`).join('');
+
+  $('oee').querySelector('tbody').innerHTML = oeeRows.map(r =>
+    `<tr><td>${r.work_center}</td><td>${pct(r.availability)}</td><td>${pct(r.performance)}</td>
+         <td>${pct(r.quality)}</td><td><b>${pct(r.oee)}</b></td></tr>`).join('');
+
+  const hours = ((max - min) / 3600000).toFixed(1);
+  $('kpis').innerHTML = `
+    <div class="kpi"><b>${data.rows.length}</b><span>операций в плане</span></div>
+    <div class="kpi"><b>${hours} ч</b><span>длительность плана</span></div>
+    <div class="kpi"><b>${wip.in_progress || 0}</b><span>в работе сейчас</span></div>
+    <div class="kpi"><b>${wip.done || 0}</b><span>закрыто</span></div>
+    <div class="kpi"><b>${loadRows[0] ? loadRows[0].work_center : '—'}</b><span>узкое место</span></div>`;
+}
+
+$('reload').onclick = () => load().catch(e => $('meta').textContent = 'ошибка: ' + e.message);
+$('replan').onclick = async () => {
+  $('meta').textContent = 'считаю…';
+  try {
+    const r = await api('/api/plan/solve', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ horizon_days: 21, max_seconds: 30, apply: true }) });
+    await load();
+    const late = r.late_orders.length ? ` · <span class="pill">опаздывают: ${r.late_orders.join(', ')}</span>` : '';
+    $('meta').innerHTML = `${r.status} за ${r.solve_seconds} с · наладки ${r.total_setup_minutes} мин${late}`;
+  } catch (e) { $('meta').textContent = 'ошибка: ' + e.message; }
+};
+load().catch(e => $('meta').textContent = 'ошибка: ' + e.message);
+
+window.MES_DEMO_REFRESH = () => { load().catch(() => {}); };
+</script>
+</body>
+</html>

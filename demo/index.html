@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Демо MES — пульт мастера и терминал оператора</title>
+<meta name="description" content="Кликабельное демо MES с APS-ядром: диаграмма Ганта по рабочим центрам, загрузка, OEE, терминал оператора. Данные — выгрузка реального прогона решателя CP-SAT.">
+<style>
+  :root{ --bg:#0e1116; --bar:#161b23; --line:#232b36; --fg:#e9edf3; --muted:#98a3b3; --accent:#4b83e8; }
+  @media (prefers-color-scheme: light){
+    :root{ --bg:#f7f8fa; --bar:#fff; --line:#e2e6ec; --fg:#161a20; --muted:#5d6675; --accent:#2f6fd0; }
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;background:var(--bg);color:var(--fg);display:flex;flex-direction:column;
+       font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  header{background:var(--bar);border-bottom:1px solid var(--line);padding:10px 18px;
+         display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+  .logo{font-weight:700;display:flex;align-items:center;gap:8px}
+  .logo i{width:10px;height:10px;border-radius:3px;background:var(--accent);display:block}
+  .tabs{display:flex;gap:6px;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:4px}
+  .tabs button{font:inherit;font-weight:600;border:none;background:transparent;color:var(--muted);
+               padding:8px 15px;border-radius:7px;cursor:pointer}
+  .tabs button[aria-selected="true"]{background:var(--accent);color:#fff}
+  .grow{flex:1}
+  .ghost{font:inherit;padding:8px 14px;border-radius:8px;border:1px solid var(--line);
+         background:transparent;color:var(--fg);cursor:pointer}
+  .ghost:hover{border-color:var(--accent)}
+  .banner{background:var(--bar);border-bottom:1px solid var(--line);padding:9px 18px;
+          font-size:13px;color:var(--muted)}
+  .banner b{color:var(--fg);font-weight:600}
+  .frames{flex:1;position:relative;min-height:0}
+  iframe{position:absolute;inset:0;width:100%;height:100%;border:none;background:var(--bg)}
+  iframe[hidden]{display:none}
+  @media(max-width:640px){ .hide-s{display:none} header{padding:10px 12px} }
+</style>
+</head>
+<body>
+
+<header>
+  <a class="logo" href="../"><i></i>MES · APS</a>
+  <div class="tabs" role="tablist">
+    <button role="tab" id="tab-master" aria-selected="true" aria-controls="f-master">Пульт мастера</button>
+    <button role="tab" id="tab-terminal" aria-selected="false" aria-controls="f-terminal">Терминал оператора</button>
+  </div>
+  <span class="grow"></span>
+  <button class="ghost" id="reset">Сбросить демо</button>
+  <a class="ghost hide-s" href="../">На лендинг</a>
+</header>
+
+<div class="banner" id="banner">Загрузка демо-данных…</div>
+
+<div class="frames">
+  <iframe id="f-master" src="master.html" title="Пульт мастера"></iframe>
+  <iframe id="f-terminal" src="terminal.html" title="Терминал оператора" hidden></iframe>
+</div>
+
+<script src="data.js"></script>
+<script>
+  window.__MES_DEMO_ROOT = window;
+</script>
+<script src="store.js"></script>
+<script>
+(function () {
+  var meta = window.MES_DEMO.meta;
+  var orders = {};
+  window.MES_DEMO.gantt.rows.forEach(function (r) { orders[r.order] = 1; });
+  var setupHours = Math.round(meta.solve.total_setup_minutes / 60);
+  document.getElementById('banner').innerHTML =
+    'Данные — выгрузка реального прогона: ' + Object.keys(orders).length + ' заказов, ' +
+    window.MES_DEMO.work_centers.length + ' рабочих центров, ' + meta.solve.operations + ' операций; ' +
+    'решатель CP-SAT вернул <b>' + meta.solve.status + '</b> за ' + Math.round(meta.solve.solve_seconds) + ' с, ' +
+    'суммарные переналадки ' + setupHours + ' ч. Неделя смен уже закрыта фактом: ' +
+    meta.history.done + ' операций закрыто, ' + meta.history.in_progress + ' в работе. ' +
+    'Экраны те же, что в системе; вместо сервера подставлен локальный стор, ' +
+    'поэтому изменения живут до перезагрузки страницы.';
+
+  var tabs = {
+    master: { btn: document.getElementById('tab-master'), frame: document.getElementById('f-master') },
+    terminal: { btn: document.getElementById('tab-terminal'), frame: document.getElementById('f-terminal') }
+  };
+
+  function show(name) {
+    Object.keys(tabs).forEach(function (key) {
+      var active = key === name;
+      tabs[key].btn.setAttribute('aria-selected', String(active));
+      tabs[key].frame.hidden = !active;
+      if (active && tabs[key].frame.contentWindow && tabs[key].frame.contentWindow.MES_DEMO_REFRESH) {
+        tabs[key].frame.contentWindow.MES_DEMO_REFRESH();
+      }
+    });
+    location.hash = name;
+  }
+
+  Object.keys(tabs).forEach(function (key) {
+    tabs[key].btn.addEventListener('click', function () { show(key); });
+  });
+
+  document.getElementById('reset').addEventListener('click', function () {
+    window.MES_DEMO_RESET();
+    tabs.master.frame.contentWindow.location.reload();
+    tabs.terminal.frame.contentWindow.location.reload();
+  });
+
+  var start = location.hash.replace('#', '');
+  show(tabs[start] ? start : 'master');
+})();
+</script>
+</body>
+</html>
