@@ -42,6 +42,13 @@
   .days { display:flex; margin-left:84px; font-size:11px; color:var(--muted); }
   .day { flex:none; border-left:1px solid var(--line); padding-left:4px; }
   .pill { display:inline-block; padding:2px 8px; border-radius:20px; font-size:12px; background:rgba(208,83,83,.16); color:var(--late); }
+  .pill.ok { background:rgba(63,143,99,.16); color:var(--ok, #3f8f63); }
+  #diff { display:none; }
+  #diff.show { display:block; }
+  #diff .grid { display:flex; gap:22px; flex-wrap:wrap; margin-bottom:10px; }
+  #diff .grid div b { display:block; font-size:20px; }
+  #diff .grid div span { color:var(--muted); font-size:12px; }
+  #diff .acts { display:flex; gap:10px; margin-top:12px; }
   .meter { height:6px; background:var(--line); border-radius:4px; overflow:hidden; }
   .meter i { display:block; height:100%; background:var(--bar); }
 </style>
@@ -52,9 +59,10 @@
   <span class="muted" id="meta">загрузка…</span>
   <span class="grow"></span>
   <button id="reload">Обновить</button>
-  <button class="primary" id="replan">Пересчитать план</button>
+  <button class="primary" id="replan">Пересчитать по факту</button>
 </header>
 <main>
+  <div class="card" id="diff"></div>
   <div class="card"><div class="kpis" id="kpis"></div></div>
   <div class="card">
     <h2>План по рабочим центрам</h2>
@@ -131,14 +139,61 @@ async function load() {
 }
 
 $('reload').onclick = () => load().catch(e => $('meta').textContent = 'ошибка: ' + e.message);
+// Пересчёт в два шага: сначала показываем, что изменится, применяем — по кнопке.
+// План в цехе уже роздан, поэтому молча переписывать его нельзя.
+async function callReplan(apply) {
+  return api('/api/plan/replan', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ horizon_days: 21, max_seconds: 30, apply }) });
+}
+
+function showDiff(r) {
+  const shifts = r.top_shifts.slice(0, 5).map(t =>
+    `<tr><td>${t.order}</td><td>${t.work_center}</td><td>${t.operation}</td><td>+${t.shift_minutes} мин</td></tr>`).join('');
+  const newlyLate = r.newly_late.length
+    ? `<span class="pill">новые опоздания: ${r.newly_late.join(', ')}</span>` : '';
+  const recovered = r.recovered.length
+    ? `<span class="pill ok">выправлены: ${r.recovered.join(', ')}</span>` : '';
+  const centers = r.center_changed_total
+    ? `<div class="muted" style="margin-top:8px">Сменили рабочий центр: ${r.center_changed_total} — ` +
+      r.center_changed.slice(0, 4).map(c => `${c.order} → ${c.work_center}`).join(', ') + '</div>'
+    : '';
+  $('diff').className = 'card show';
+  $('diff').innerHTML = `
+    <h2>Пересчёт по факту · ${r.status} за ${r.solve_seconds} с</h2>
+    <div class="grid">
+      <div><b>${r.moved_later}</b><span>сдвинуто позже</span></div>
+      <div><b>${r.moved_earlier}</b><span>сдвинуто раньше</span></div>
+      <div><b>${r.unchanged}</b><span>без изменений</span></div>
+      <div><b>${r.pinned}</b><span>закреплено в работе</span></div>
+      <div><b>${r.max_shift_minutes > 0 ? '+' : ''}${r.max_shift_minutes} мин</b><span>наибольший сдвиг: + позже, − раньше</span></div>
+      <div><b>${r.makespan_hours} ч</b><span>длительность плана</span></div>
+    </div>
+    ${newlyLate} ${recovered}
+    ${shifts ? `<table style="margin-top:10px"><thead><tr><th>Заказ</th><th>Центр</th><th>Операция</th><th>Сдвиг</th></tr></thead><tbody>${shifts}</tbody></table>` : ''}
+    ${centers}
+    <div class="acts">
+      <button class="primary" id="apply-replan">Применить план</button>
+      <button id="cancel-replan">Оставить как есть</button>
+    </div>`;
+  $('apply-replan').onclick = async () => {
+    $('meta').textContent = 'применяю…';
+    try {
+      const applied = await callReplan(true);
+      $('diff').className = 'card';
+      await load();
+      $('meta').textContent = `план обновлён: операций ${applied.applied}`;
+    } catch (e) { $('meta').textContent = 'ошибка: ' + e.message; }
+  };
+  $('cancel-replan').onclick = () => { $('diff').className = 'card'; load().catch(() => {}); };
+}
+
 $('replan').onclick = async () => {
   $('meta').textContent = 'считаю…';
   try {
-    const r = await api('/api/plan/solve', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ horizon_days: 21, max_seconds: 30, apply: true }) });
-    await load();
-    const late = r.late_orders.length ? ` · <span class="pill">опаздывают: ${r.late_orders.join(', ')}</span>` : '';
-    $('meta').innerHTML = `${r.status} за ${r.solve_seconds} с · наладки ${r.total_setup_minutes} мин${late}`;
+    const r = await callReplan(false);
+    showDiff(r);
+    const late = r.late_after.length ? ` · <span class="pill">опаздывают: ${r.late_after.join(', ')}</span>` : '';
+    $('meta').innerHTML = `пересчёт готов · наладки ${r.total_setup_minutes} мин${late}`;
   } catch (e) { $('meta').textContent = 'ошибка: ' + e.message; }
 };
 load().catch(e => $('meta').textContent = 'ошибка: ' + e.message);

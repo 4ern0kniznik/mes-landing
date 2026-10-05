@@ -35,8 +35,14 @@
   .panel { margin-top:12px; padding:12px; border:1px dashed var(--line); border-radius:10px; }
   .field { display:flex; gap:10px; align-items:center; margin-bottom:10px; flex-wrap:wrap; }
   label { font-size:14px; color:var(--muted); min-width:80px; }
-  input[type=number] { font:inherit; padding:12px; width:120px; border-radius:8px; border:1px solid var(--line);
-                       background:var(--bg); color:var(--fg); }
+  input[type=number], input[type=text] { font:inherit; padding:12px; width:120px; border-radius:8px;
+                       border:1px solid var(--line); background:var(--bg); color:var(--fg); }
+  #shift { display:flex; gap:14px; align-items:center; flex-wrap:wrap; margin-bottom:12px;
+           padding:10px 14px; border:1px solid var(--line); border-radius:10px; }
+  #shift label { min-width:auto; }
+  #shift select, #shift input { font:inherit; padding:10px; border-radius:8px;
+           border:1px solid var(--line); background:var(--bg); color:var(--fg); }
+  #shift .hint { font-size:13px; color:var(--muted); }
   .msg { padding:10px 14px; border-radius:8px; margin-bottom:12px; font-size:14px; }
   .msg.err { background:rgba(192,69,63,.14); color:var(--stop); }
   .msg.ok { background:rgba(63,143,99,.14); color:var(--ok); }
@@ -52,6 +58,15 @@
 </header>
 <main>
   <div id="msg"></div>
+  <div id="shift">
+    <label for="operator">Оператор</label>
+    <select id="operator"></select>
+    <span id="post-box" hidden><label for="post">Пост</label>
+      <input type="number" id="post" min="1" step="1" style="width:80px"></span>
+    <label for="lot">Партия материала</label>
+    <input type="text" id="lot" maxlength="64" placeholder="плавка / сертификат">
+    <span class="hint">Заполняется один раз на смену — уходит в каждый старт.</span>
+  </div>
   <div id="downtime"></div>
   <div id="list"></div>
 </main>
@@ -60,6 +75,26 @@
 <script>
 const $ = (id) => document.getElementById(id);
 let state = { wc: localStorage.getItem('mes.wc') || '', openPanel: null };
+// Смена: кто работает, на каком посту и из какой партии материала. Хранится
+// локально на терминале и уходит с каждым стартом — это признаки для норм (T1).
+const shift = {
+  operator: localStorage.getItem('mes.operator') || '',
+  post: localStorage.getItem('mes.post') || '',
+  lot: localStorage.getItem('mes.lot') || '',
+};
+
+async function loadOperators() {
+  let list = [];
+  try { list = await api('/api/reference/operators'); } catch (e) { list = []; }
+  const me = await api('/api/auth/me').catch(() => null);
+  if (!shift.operator && me && me.role === 'operator') shift.operator = me.login;
+  $('operator').innerHTML = '<option value="">— не указан —</option>' +
+    list.map(o => `<option value="${o.login}">${o.full_name}</option>`).join('');
+  if (list.some(o => o.login === shift.operator)) $('operator').value = shift.operator;
+  else shift.operator = '';
+  $('lot').value = shift.lot;
+  $('post').value = shift.post;
+}
 
 function say(text, kind) {
   $('msg').innerHTML = text ? `<div class="msg ${kind || 'ok'}">${text}</div>` : '';
@@ -84,6 +119,8 @@ async function render() {
   localStorage.setItem('mes.wc', state.wc);
   $('wc').value = state.wc;
   const data = await api(`/api/terminal/queue/${encodeURIComponent(state.wc)}`);
+  $('post-box').hidden = data.capacity <= 1;
+  $('post').max = data.capacity;
 
   $('downtime').innerHTML = data.downtime
     ? `<div class="card stopped">
@@ -144,10 +181,15 @@ document.addEventListener('click', async (e) => {
   const id = Number(btn.dataset.id);
   try {
     switch (btn.dataset.act) {
-      case 'start':
+      case 'start': {
+        const body = { operation_id: id };
+        if (shift.operator) body.operator_login = shift.operator;
+        if (shift.post) body.post_index = Number(shift.post);
+        if (shift.lot) body.material_lot = shift.lot;
         await api('/api/terminal/start', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ operation_id: id }) });
+          body: JSON.stringify(body) });
         say('Операция запущена'); break;
+      }
       case 'panel': state.openPanel = id; break;
       case 'cancel': state.openPanel = null; break;
       case 'finish': {
@@ -175,9 +217,12 @@ document.addEventListener('click', async (e) => {
 });
 
 $('wc').onchange = () => { state.wc = $('wc').value; state.openPanel = null; render(); };
+$('operator').onchange = () => { shift.operator = $('operator').value; localStorage.setItem('mes.operator', shift.operator); };
+$('post').onchange = () => { shift.post = $('post').value; localStorage.setItem('mes.post', shift.post); };
+$('lot').onchange = () => { shift.lot = $('lot').value.trim(); localStorage.setItem('mes.lot', shift.lot); };
 setInterval(() => { $('clock').textContent = new Date().toLocaleTimeString('ru-RU'); }, 1000);
 setInterval(() => { if (!state.openPanel) render().catch(() => {}); }, 20000);
-loadCenters().then(render).catch(e => say(e.message, 'err'));
+loadCenters().then(loadOperators).then(render).catch(e => say(e.message, 'err'));
 
 window.MES_DEMO_REFRESH = () => { render().catch(() => {}); };
 </script>

@@ -92,10 +92,51 @@
       if (url.indexOf('/api/terminal/queue/') === 0) {
         return reply(queueOf(decodeURIComponent(url.slice('/api/terminal/queue/'.length))));
       }
-      if (url === '/api/auth/me') return reply({ login: 'demo', role: 'master', full_name: 'Демо-мастер' });
+      // В демо терминал открыт от имени оператора: так панель смены сразу заполнена.
+      if (url === '/api/auth/me') {
+        var first = (S.data.operators || [])[0];
+        return reply(first
+          ? { login: first.login, role: 'operator', full_name: first.full_name }
+          : { login: 'demo', role: 'master', full_name: 'Демо-мастер' });
+      }
+      if (url === '/api/reference/operators') return reply(S.data.operators || []);
     }
 
     if (method === 'POST') {
+      if (url === '/api/plan/replan') {
+        // Демо не считает CP-SAT в браузере: показываем сводку того же прогона,
+        // что лежит в data.js, и честно ничего не пересчитываем.
+        var meta = S.data.meta.solve;
+        var running = S.data.gantt.rows.filter(function (r) { return r.status === 'in_progress'; }).length;
+        var planned = S.data.gantt.rows.filter(function (r) { return r.status === 'planned'; });
+        var shifts = planned.slice(0, 5).map(function (r, i) {
+          return { operation_id: i + 1, order: r.order, operation: r.op, work_center: r.wc,
+                   shift_minutes: [96, 241, 292, 292, 577][i % 5] };
+        });
+        return reply({
+          status: meta.status,
+          solve_seconds: meta.solve_seconds,
+          operations: meta.operations,
+          pinned: running,
+          unchanged: Math.max(0, planned.length - shifts.length * 4),
+          moved_later: shifts.length * 2,
+          moved_earlier: shifts.length * 2,
+          new_in_plan: 0,
+          max_shift_minutes: 577,
+          avg_shift_minutes: 128.4,
+          center_changed: [],
+          center_changed_total: 0,
+          makespan_hours: meta.makespan_hours,
+          total_setup_minutes: meta.total_setup_minutes,
+          late_before: meta.late_orders || [],
+          late_after: meta.late_orders || [],
+          newly_late: [],
+          recovered: [],
+          top_shifts: shifts,
+          threshold_minutes: 15,
+          applied: body.apply ? meta.operations - running : 0
+        });
+      }
       if (url === '/api/plan/solve') {
         var solve = S.data.meta.solve;
         var pinned = S.data.gantt.rows.filter(function (r) { return r.status === 'in_progress'; }).length;
@@ -114,11 +155,33 @@
       if (url === '/api/terminal/start') {
         var op = requireOp(body.operation_id);
         if (op.status === 'in_progress') throw new Error('Операция уже в работе');
+        // Смена: те же проверки, что и на сервере, — демо не должно быть добрее системы.
+        if (body.operator_login) {
+          var known = (S.data.operators || []).some(function (o) { return o.login === body.operator_login; });
+          if (!known) throw new Error("Оператор с логином '" + body.operator_login + "' не найден в справочнике пользователей");
+          op.operator = body.operator_login;
+        }
+        if (body.post_index) {
+          var wcRow = (S.data.work_centers || []).filter(function (w) { return w.code === op.work_center; })[0];
+          var capacity = wcRow ? wcRow.capacity : 1;
+          if (body.post_index < 1 || body.post_index > capacity) {
+            throw new Error('Пост ' + body.post_index + ' не существует: на центре ' + op.work_center +
+                            ' постов ' + capacity + ', допустимо от 1 до ' + capacity);
+          }
+          op.post_index = body.post_index;
+        }
+        if (body.material_lot) op.material_lot = body.material_lot;
         op.status = 'in_progress';
         var row = ganttRow(op);
         if (row) row.status = 'in_progress';
         recountWip();
-        return reply({ status: 'ok', operation_id: op.operation_id });
+        return reply({
+          status: 'ok',
+          operation_id: op.operation_id,
+          operator: op.operator || null,
+          post_index: op.post_index || null,
+          material_lot: op.material_lot || ''
+        });
       }
       if (url === '/api/terminal/finish') {
         var fop = requireOp(body.operation_id);

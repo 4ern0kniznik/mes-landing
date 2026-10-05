@@ -12,7 +12,7 @@ random.seed(20260907)
 from fastapi.testclient import TestClient
 from app.auth import create_user
 from app.db import SessionLocal, init_db
-from app.models import Downtime, Operation, OperationStatus, UserRole, WorkCenter
+from app.models import Downtime, Operation, OperationStatus, User, UserRole, WorkCenter
 from app.seed import seed
 
 now = datetime.now().replace(second=0, microsecond=0)
@@ -22,6 +22,9 @@ init_db()
 s = SessionLocal()
 stats = seed(s, horizon_start=horizon_start)
 create_user(s, "demo", "demo-demo-1", UserRole.MASTER, full_name="Демо-мастер")
+# Операторы нужны демо-терминалу: панель смены выбирает из этого списка.
+for login, fio in [("ivanov", "Иванов И. И."), ("petrov", "Петров П. П."), ("sidorova", "Сидорова А. В.")]:
+    create_user(s, login, "demo-demo-1", UserRole.OPERATOR, full_name=fio)
 s.commit()
 s.close()
 
@@ -55,6 +58,18 @@ print("solve:", solve["status"], solve["solve_seconds"], "с, операций",
 # --- история: то, что по плану уже прошло, закрываем с реальным разбросом ---
 s = SessionLocal()
 done = started = 0
+operators = s.query(User).filter(User.role == UserRole.OPERATOR).order_by(User.login).all()
+lots = ["ПЛ-2026-11", "ПЛ-2026-12", "ПЛ-2026-14"]
+capacity_of = {wc.id: wc.capacity for wc in s.query(WorkCenter).all()}
+
+
+def set_shift(op):
+    """Проставить смену: кто, на каком посту, из какой партии материала."""
+    op.operator_id = random.choice(operators).id
+    op.post_index = random.randint(1, capacity_of.get(op.work_center_id, 1))
+    op.material_lot = random.choice(lots)
+
+
 for op in s.query(Operation).filter(Operation.planned_start.isnot(None)).all():
     if op.planned_end and op.planned_end <= now:
         delay = random.randint(0, 12)
@@ -67,10 +82,12 @@ for op in s.query(Operation).filter(Operation.planned_start.isnot(None)).all():
         qty = max(1, op.lot_qty or op.order.qty)
         op.qty_scrap = 1 if random.random() < 0.22 else 0
         op.qty_good = max(0, qty - op.qty_scrap)
+        set_shift(op)
         done += 1
     elif op.planned_start and op.planned_start <= now < (op.planned_end or now):
         op.actual_start = op.planned_start + timedelta(minutes=random.randint(0, 20))
         op.status = OperationStatus.IN_PROGRESS
+        set_shift(op)
         started += 1
 
 # на нескольких центрах смена уже идёт — иначе терминал выглядит пустым
@@ -85,6 +102,7 @@ for wc_code in ("ASSY", "CNC", "WELD", "QC"):
     if nxt is not None:
         nxt.actual_start = now - timedelta(minutes=random.randint(10, 50))
         nxt.status = OperationStatus.IN_PROGRESS
+        set_shift(nxt)
         started += 1
 
 # два закрытых простоя за неделю — иначе доступность выглядит стерильно
@@ -109,6 +127,7 @@ data = {
     "oee": c.get("/api/reports/oee?days=7").json(),
     "wip": c.get("/api/reports/wip").json(),
     "work_centers": wcs,
+    "operators": c.get("/api/reference/operators").json(),
     "downtime_reasons": c.get("/api/terminal/downtime-reasons").json(),
     "queues": {wc["code"]: c.get(f"/api/terminal/queue/{wc['code']}").json() for wc in wcs},
 }
